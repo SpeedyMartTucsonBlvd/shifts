@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Speedy Mart Shifts</title>
+<meta name="theme-color" content="#1F4E79">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="SM Shifts">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="app">
+  <header class="appbar">
+    <div class="logo">SM</div>
+    <div class="titles"><div class="t" id="barTitle">Speedy Mart</div><div class="s" id="barSub">Shift app</div></div>
+    <span class="sync" id="sync" hidden></span>
+    <button class="back" id="backBtn" type="button" hidden>Back</button>
+  </header>
+  <div class="steps" id="steps" hidden></div>
+  <main class="screen" id="screen"><p class="hint">Loading…</p></main>
+</div>
+<input type="file" id="camIn" accept="image/*" capture="environment" hidden>
+<input type="file" id="photoIn" accept="image/*" capture="environment" hidden>
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js" defer></script>
+<script src="app.js" defer></script>
+</body>
+</html>
