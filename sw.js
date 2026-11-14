@@ -1,6 +1,6 @@
 // Keeps the app working when the store's internet drops.
 // Bump VERSION whenever you upload changed files so devices pick them up.
-const VERSION = "sm-shifts-v1";
+const VERSION = "sm-shifts-v2";
 const SHELL = ["./", "index.html", "app.css", "app.js", "config.js", "manifest.webmanifest",
   "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 
@@ -16,10 +16,11 @@ self.addEventListener("fetch", e => {
   if (e.request.method !== "GET") return;
   // Never cache the Google Sheet connection.
   if (/google(usercontent)?\.com$/.test(url.hostname)) return;
-  if (url.hostname === "cdn.jsdelivr.net") {
+  if (/(^|\.)jsdelivr\.net$/.test(url.hostname)) {
     // Barcode reader library: cache after the first download.
     e.respondWith(caches.match(e.request).then(hit => hit || fetch(e.request).then(res => {
-      const copy = res.clone(); caches.open(VERSION).then(c => c.put(e.request, copy)); return res;
+      if (res.ok) { const copy = res.clone(); caches.open(VERSION).then(c => c.put(e.request, copy)); }
+      return res;
     })));
     return;
   }

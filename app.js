@@ -403,29 +403,57 @@ function canvasFrom(img, max, rot) {
   return c;
 }
 async function readBarcode(file) {
-  const img = await loadImg(file);
+  const img = await loadImg(file), tried = [];
+  const good = t => String(t || "").replace(/\D/g, "").length >= 13;
+  // 1. The phone's built-in reader (Android Chrome).
   if ("BarcodeDetector" in window) {
     try {
       const det = new BarcodeDetector({ formats: ["itf", "code_128"] });
       const found = (await det.detect(img)).sort((a, b) => b.rawValue.length - a.rawValue.length)[0];
-      if (found && found.rawValue.replace(/\D/g, "").length >= 13) return { text: found.rawValue, format: found.format + " (phone)" };
-    } catch (e) {}
+      if (found && good(found.rawValue)) return { text: found.rawValue, format: found.format, engine: "phone" };
+      tried.push("phone: none");
+    } catch (e) { tried.push("phone: error"); }
   }
-  if (!window.ZXing) throw new Error("The barcode reader didn't load. Connect to the internet once, then reopen the app.");
-  const Z = window.ZXing, hints = new Map();
-  hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.ITF, Z.BarcodeFormat.CODE_128]);
-  hints.set(Z.DecodeHintType.TRY_HARDER, true);
-  const reader = new Z.MultiFormatReader(); reader.setHints(hints);
-  for (const [max, rot] of [[1600, false], [1600, true], [2400, false], [2400, true], [1000, false], [1000, true]]) {
-    const c = canvasFrom(img, max, rot), data = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
-    const lum = new Uint8ClampedArray(c.width * c.height);
-    for (let i = 0, j = 0; i < lum.length; i++, j += 4) lum[i] = (data[j] * 306 + data[j + 1] * 601 + data[j + 2] * 117) >> 10;
+  // 2. zxing-cpp (WebAssembly). Strongest reader, works on iPhone.
+  if (window.ZXingWASM && window.ZXingWASM.readBarcodes) {
     try {
-      const r = reader.decode(new Z.BinaryBitmap(new Z.HybridBinarizer(new Z.RGBLuminanceSource(lum, c.width, c.height))));
-      return { text: r.getText(), format: Z.BarcodeFormat[r.getBarcodeFormat()] };
-    } catch (e) {}
-  }
-  throw new Error("No barcode found in that photo.");
+      const res = await window.ZXingWASM.readBarcodes(file, { formats: ["ITF", "Code128"], tryHarder: true, tryRotate: true, tryInvert: false, tryDownscale: true, maxNumberOfSymbols: 4 });
+      const hit = (res || []).filter(r => r.isValid !== false && good(r.text)).sort((a, b) => b.text.length - a.text.length)[0];
+      if (hit) return { text: hit.text, format: hit.format, engine: "wasm" };
+      tried.push("wasm: " + ((res || []).length ? (res || []).map(r => r.format + ":" + (r.text || "").length).join(",") : "none"));
+    } catch (e) { tried.push("wasm: error " + ((e && e.message) || "").slice(0, 40)); }
+  } else tried.push("wasm: not loaded");
+  // 3. ZXing JavaScript, on the whole photo and on horizontal strips of it.
+  if (window.ZXing) {
+    const Z = window.ZXing, hints = new Map();
+    hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.ITF, Z.BarcodeFormat.CODE_128]);
+    hints.set(Z.DecodeHintType.TRY_HARDER, true);
+    const reader = new Z.MultiFormatReader(); reader.setHints(hints);
+    const attempt = (c) => {
+      const data = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      const lum = new Uint8ClampedArray(c.width * c.height);
+      for (let i = 0, j = 0; i < lum.length; i++, j += 4) lum[i] = (data[j] * 306 + data[j + 1] * 601 + data[j + 2] * 117) >> 10;
+      const src = new Z.RGBLuminanceSource(lum, c.width, c.height);
+      for (const Bin of [Z.HybridBinarizer, Z.GlobalHistogramBinarizer]) {
+        try { const r = reader.decode(new Z.BinaryBitmap(new Bin(src)), hints); if (good(r.getText())) return r; } catch (e) {}
+      }
+      return null;
+    };
+    for (const [max, rot] of [[2000, false], [2000, true], [1200, false], [1200, true], [3000, false]]) {
+      const full = canvasFrom(img, max, rot);
+      let r = attempt(full);
+      // Strips: each a third of the height, overlapping, so the ticket's barcode fills more of the picture.
+      for (let k = 0; !r && k < 5; k++) {
+        const h = Math.round(full.height / 3), y = Math.round(k * full.height / 6);
+        const strip = document.createElement("canvas"); strip.width = full.width; strip.height = Math.min(h, full.height - y);
+        strip.getContext("2d", { willReadFrequently: true }).drawImage(full, 0, y, full.width, strip.height, 0, 0, full.width, strip.height);
+        r = attempt(strip);
+      }
+      if (r) return { text: r.getText(), format: Z.BarcodeFormat[r.getBarcodeFormat()], engine: "js" };
+    }
+    tried.push("js: none");
+  } else tried.push("js: not loaded");
+  throw new Error("No barcode found (" + tried.join("; ") + ")");
 }
 
 // ---------- Close: step 3 reports ----------
@@ -642,7 +670,7 @@ SCREENS.test = () => {
   ${TESTS.length ? `<div class="group"><h3><span>Results</span><span>${TESTS.filter(t => t.parsed).length} of ${TESTS.length} read</span></h3>
   ${TESTS.map(t => `<div class="slot" style="grid-template-columns:56px minmax(0,1fr)"><img src="${t.img}" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px">
    <div style="min-width:0">${t.parsed ? `<div class="main">Game ${t.parsed.game} · Pack ${t.parsed.pack} · Ticket ${pad3(t.parsed.ticket)}</div>
-   <div class="meta" style="word-break:break-all">Raw: ${t.parsed.raw} · ${esc(t.res.format)} · ${t.ms} ms</div>`
+   <div class="meta" style="word-break:break-all">Raw: ${t.parsed.raw} · ${esc(t.res.format)} · ${esc(t.res.engine || "")} · ${t.ms} ms</div>`
     : `<div class="main neg">Couldn't read it</div><div class="meta" style="word-break:break-all">${t.res ? `Read "${esc(t.res.text)}" but it's too short` : esc(t.err)} · ${t.ms} ms</div>`}</div></div>`).join("")}</div>
   <p class="hint">Check each result against the number printed under the barcode, like 1530-107551-027.</p>` : ""}
   <div style="margin-top:auto"><button class="btn ghost" id="prev" type="button">Back</button></div>`;
