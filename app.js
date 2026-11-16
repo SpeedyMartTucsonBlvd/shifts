@@ -24,7 +24,7 @@ const AMOUNTS = [["mixed", "$2 bills / half dollars / dollar coins"], ["big", "$
 const SAFE = [["r5", "Row 5 ($1)", "bundles of 20 × $1", 20], ["r7", "Row 7 ($5)", "bundles of 10 × $5", 50], ["r8", "Row 8 ($20)", "bundles of 3 × $20", 60]];
 const POS_FIELDS = [["expected", "Expected cash in drawer"], ["posScratch", "Scratcher sales"], ["posDraw", "Lotto / draw game sales"], ["posPayout", "Lottery payouts"], ["drops", "Cash drops (total)"]];
 const SHIFT_LOTTO = [["loaded", "Tickets loaded"]];
-const EOD_LOTTO = [["begInv", "Beginning scratcher inventory"], ["endInv", "Ending scratcher inventory"], ["termDraw", "Draw game gross sales"], ["cashes", "Draw game cashes"], ["validations", "Scratcher validations"]];
+const EOD_LOTTO = [["termDraw", "Draw game gross sales"], ["cashes", "Draw game cashes"], ["validations", "Scratcher validations"]];
 const reportFields = () => POS_FIELDS.concat(SHIFT_LOTTO, D && D.last ? EOD_LOTTO : []);
 const PRICES = [1, 2, 3, 5, 10, 20, 30, 50];
 const STEPS = ["Count", "Lottery", "Reports", "Photos", "Review"];
@@ -511,12 +511,11 @@ function calc() {
     ["Scratchers (POS − scanned)", r2(n(r.posScratch) - lot)],
     ["Register (counted − expected)", r2(regTotal(D.counts) - n(r.expected))]
   ];
-  let inv = null;
+  const inv = null;
   if (D.last) {
-    // Draw games, payouts and inventory come from the lottery report once a day, so they're checked for the whole day.
+    // Draw games and payouts come from the lottery report once a day, so they're checked for the whole day.
     lines.push(["Draw games (day's POS − lottery report)", r2(n(r.posDraw) + sum("posDraw") - n(r.termDraw))]);
     lines.push(["Payouts (lottery report − day's POS)", r2(n(r.cashes) + n(r.validations) - n(r.posPayout) - sum("posPayout"))]);
-    inv = r2(n(r.begInv) + n(r.loaded) + sum("loaded") - n(r.endInv) - lot - sum("scanned"));
   }
   const total = r2(lines.reduce((a, l) => a + l[1], 0));
   return { lines, total, day: r2(total + others.reduce((a, x) => a + x.total, 0)), inv, lot };
@@ -529,7 +528,7 @@ function stepReview() {
   return `<h2>Check and send</h2>
   <div class="sum">${c.lines.map(([l, v]) => `<div><span>${l}</span><span class="num ${v < -0.004 ? "neg" : v > 0.004 ? "pos" : ""}">${signed(v)}</span></div>`).join("")}
   <div style="font-weight:700"><span>Shift ${S.shift} over / short</span><span class="num">${signed(c.total)}</span></div></div>
-  <div class="sum">${c.inv === null ? `<div><span>Draw games, payouts and inventory</span><span class="pill info">Checked at end of day</span></div>` : `<div><span>Cross-check: day's scans vs lottery inventory</span><span class="pill ${Math.abs(c.inv) < 0.01 ? "good" : "warn"}">${Math.abs(c.inv) < 0.01 ? "Match" : "Off " + signed(c.inv)}</span></div>`}
+  <div class="sum">${D.last ? "" : `<div><span>Draw games and payouts</span><span class="pill info">Checked at end of day</span></div>`}
   <div><span>Register / safe counted</span><span class="num">${money(regTotal(D.counts))} / ${money(safeTotal(D.counts))}</span></div></div>
   ${missing.length || notDone || blank.length ? `<div class="verdict info"><b>Before you send</b><span>${[missing.length ? "Missing: " + missing.join(", ") + "." : "", notDone ? notDone + " lottery slot" + (notDone > 1 ? "s" : "") + " not scanned." : "", blank.length ? "Blank: " + blank.join(", ") + "." : ""].filter(Boolean).join(" ")}</span></div>` : ""}
   <label class="check"><input type="checkbox" id="last" ${D.last ? "checked" : ""}><span><b>Last shift of the day</b><br><span class="hint">Closes out ${niceDate(S.date)}. ${D.last ? "End-of-day lottery numbers are on the Reports step." : "Some days that's Shift 2, some days Shift 3."}</span></span></label>
