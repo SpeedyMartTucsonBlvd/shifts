@@ -22,10 +22,10 @@ const COINS = [["pennies", "Pennies", 0.01, 50], ["nickels", "Nickels", 0.05, 40
 const BILLS = [["ones", "Ones", 1], ["fives", "Fives", 5], ["tens", "Tens", 10], ["twenties", "Twenties", 20]];
 const AMOUNTS = [["mixed", "$2 bills / half dollars / dollar coins"], ["big", "$50 / $100 bills"]];
 const SAFE = [["r5", "Row 5 ($1)", "bundles of 20 × $1", 20], ["r7", "Row 7 ($5)", "bundles of 10 × $5", 50], ["r8", "Row 8 ($20)", "bundles of 3 × $20", 60]];
-const REPORTS = [
-  ["POS shift report", [["expected", "Expected cash in drawer"], ["posScratch", "Scratcher sales"], ["posDraw", "Lotto / draw game sales"], ["posPayout", "Lottery payouts"], ["drops", "Cash drops (total)"]]],
-  ["Lottery machine report", [["begInv", "Beginning scratcher inventory"], ["loaded", "Tickets loaded"], ["endInv", "Ending scratcher inventory"], ["termDraw", "Draw game gross sales"], ["cashes", "Draw game cashes"], ["validations", "Scratcher validations"]]]
-];
+const POS_FIELDS = [["expected", "Expected cash in drawer"], ["posScratch", "Scratcher sales"], ["posDraw", "Lotto / draw game sales"], ["posPayout", "Lottery payouts"], ["drops", "Cash drops (total)"]];
+const SHIFT_LOTTO = [["loaded", "Tickets loaded"]];
+const EOD_LOTTO = [["begInv", "Beginning scratcher inventory"], ["endInv", "Ending scratcher inventory"], ["termDraw", "Draw game gross sales"], ["cashes", "Draw game cashes"], ["validations", "Scratcher validations"]];
+const reportFields = () => POS_FIELDS.concat(SHIFT_LOTTO, D && D.last ? EOD_LOTTO : []);
 const PRICES = [1, 2, 3, 5, 10, 20, 30, 50];
 const STEPS = ["Count", "Lottery", "Reports", "Photos", "Review"];
 
@@ -460,10 +460,17 @@ async function readBarcode(file) {
 function stepReports() {
   const np = (B.slots || []).map(slotCalc).filter(c => c.isNew).length;
   return `<h2>Numbers from the printouts</h2><p class="hint">Copy these from the POS shift report and the lottery machine's report. You'll take photos of both next.</p>
-  ${REPORTS.map(([h, fs]) => `<div class="group"><h3><span>${h}</span></h3>${fs.map(([k, l]) => `<div class="row two"><div class="lbl">${l}</div><input class="amt" id="r-${k}" inputmode="decimal" value="${esc(D.reports[k] ?? "")}" placeholder="0.00" aria-label="${l}"></div>`).join("")}</div>`).join("")}
+  ${[["POS shift report", POS_FIELDS], ["Lottery machine report", SHIFT_LOTTO]].map(([h, fs]) => fieldGroup(h, fs)).join("")}
+  <label class="check"><input type="checkbox" id="lastR" ${D.last ? "checked" : ""}><span><b>Last shift of the day</b><br><span class="hint">Check this if you're closing out the day. You'll add the end-of-day lottery numbers.</span></span></label>
+  ${D.last ? fieldGroup("Lottery report · end of day", EOD_LOTTO) : ""}
   <p class="hint">${np ? `You scanned ${np} new pack${np > 1 ? "s" : ""} this shift. Tickets loaded should include ${np > 1 ? "them" : "it"}.` : "No new packs scanned this shift."}</p>
   ${nav()}`;
 }
+
+function fieldGroup(h, fs) {
+  return `<div class="group"><h3><span>${h}</span></h3>${fs.map(([k, l]) => `<div class="row two"><div class="lbl">${l}</div><input class="amt" id="r-${k}" inputmode="decimal" value="${esc(D.reports[k] ?? "")}" placeholder="0.00" aria-label="${l}"></div>`).join("")}</div>`;
+}
+function bindReports() { $("#lastR").onchange = e => { D.last = e.target.checked; saveDraft(); render(); }; }
 
 // ---------- Close: step 4 photos ----------
 const PH = $("#photoIn"); let photoTarget = null;
@@ -498,28 +505,34 @@ async function shrink(file) {
 // ---------- Close: step 5 review ----------
 function calc() {
   const r = D.reports, lot = lotteryDollars();
+  const others = S.date === B.today ? (B.todayShifts || []).filter(x => x.shift !== S.shift) : [];
+  const sum = k => others.reduce((a, x) => a + (Number(x[k]) || 0), 0);
   const lines = [
     ["Scratchers (POS − scanned)", r2(n(r.posScratch) - lot)],
-    ["Draw games (POS − lottery report)", r2(n(r.posDraw) - n(r.termDraw))],
-    ["Payouts (lottery report − POS)", r2(n(r.cashes) + n(r.validations) - n(r.posPayout))],
     ["Register (counted − expected)", r2(regTotal(D.counts) - n(r.expected))]
   ];
+  let inv = null;
+  if (D.last) {
+    // Draw games, payouts and inventory come from the lottery report once a day, so they're checked for the whole day.
+    lines.push(["Draw games (day's POS − lottery report)", r2(n(r.posDraw) + sum("posDraw") - n(r.termDraw))]);
+    lines.push(["Payouts (lottery report − day's POS)", r2(n(r.cashes) + n(r.validations) - n(r.posPayout) - sum("posPayout"))]);
+    inv = r2(n(r.begInv) + n(r.loaded) + sum("loaded") - n(r.endInv) - lot - sum("scanned"));
+  }
   const total = r2(lines.reduce((a, l) => a + l[1], 0));
-  const others = S.date === B.today ? (B.todayShifts || []).filter(x => x.shift !== S.shift).reduce((a, x) => a + x.total, 0) : 0;
-  return { lines, total, day: r2(total + others), inv: r2(n(r.begInv) + n(r.loaded) - n(r.endInv) - lot), lot };
+  return { lines, total, day: r2(total + others.reduce((a, x) => a + x.total, 0)), inv, lot };
 }
 function stepReview() {
   const c = calc(), limit = B.limit || 6, off = Math.abs(c.day) > limit;
   const missing = [!D.photos.pos && "POS report photo", !D.photos.lotto && "lottery report photo"].filter(Boolean);
   const notDone = (B.slots || []).filter(st => !["ok", "first"].includes(slotCalc(st).state)).length;
-  const blank = REPORTS.flatMap(g => g[1]).filter(([k]) => D.reports[k] === undefined || D.reports[k] === "").map(x => x[1]);
+  const blank = reportFields().filter(([k]) => D.reports[k] === undefined || D.reports[k] === "").map(x => x[1]);
   return `<h2>Check and send</h2>
   <div class="sum">${c.lines.map(([l, v]) => `<div><span>${l}</span><span class="num ${v < -0.004 ? "neg" : v > 0.004 ? "pos" : ""}">${signed(v)}</span></div>`).join("")}
   <div style="font-weight:700"><span>Shift ${S.shift} over / short</span><span class="num">${signed(c.total)}</span></div></div>
-  <div class="sum"><div><span>Cross-check: scans vs lottery inventory</span><span class="pill ${Math.abs(c.inv) < 0.01 ? "good" : "warn"}">${Math.abs(c.inv) < 0.01 ? "Match" : "Off " + signed(c.inv)}</span></div>
+  <div class="sum">${c.inv === null ? `<div><span>Draw games, payouts and inventory</span><span class="pill info">Checked at end of day</span></div>` : `<div><span>Cross-check: day's scans vs lottery inventory</span><span class="pill ${Math.abs(c.inv) < 0.01 ? "good" : "warn"}">${Math.abs(c.inv) < 0.01 ? "Match" : "Off " + signed(c.inv)}</span></div>`}
   <div><span>Register / safe counted</span><span class="num">${money(regTotal(D.counts))} / ${money(safeTotal(D.counts))}</span></div></div>
   ${missing.length || notDone || blank.length ? `<div class="verdict info"><b>Before you send</b><span>${[missing.length ? "Missing: " + missing.join(", ") + "." : "", notDone ? notDone + " lottery slot" + (notDone > 1 ? "s" : "") + " not scanned." : "", blank.length ? "Blank: " + blank.join(", ") + "." : ""].filter(Boolean).join(" ")}</span></div>` : ""}
-  <label class="check"><input type="checkbox" id="last" ${D.last ? "checked" : ""}><span><b>Last shift of the day</b><br><span class="hint">Closes out ${niceDate(S.date)}. Some days that's Shift 2, some days Shift 3.</span></span></label>
+  <label class="check"><input type="checkbox" id="last" ${D.last ? "checked" : ""}><span><b>Last shift of the day</b><br><span class="hint">Closes out ${niceDate(S.date)}. ${D.last ? "End-of-day lottery numbers are on the Reports step." : "Some days that's Shift 2, some days Shift 3."}</span></span></label>
   <div class="verdict ${off ? "flag" : "ok"}"><b>${D.last ? "Day total" : "Day so far"} ${signed(c.day)}</b>
   <span>${off ? `That's more than ${money(limit)}. Recount the drawer and re-scan before sending. If it's still off, add a note.` : `Within ${money(limit)}.`}</span></div>
   <div class="field"><label for="note">Note for the owners (optional)</label><input type="text" id="note" value="${esc(D.note)}" placeholder="e.g. customer paid with a torn $20"></div>
@@ -537,7 +550,7 @@ async function sendClose(correction) {
   if (D.photos.lotto) photos.push({ label: "Lottery report", data: D.photos.lotto });
   D.photos.extra.forEach((p, i) => photos.push({ label: "Other " + (i + 1), data: p }));
   const slots = (B.slots || []).map(st => { const d = D.slots[st.slot]; return d && d.end !== null && d.end !== undefined && d.end !== "" ? { slot: st.slot, game: d.game || st.game, pack: d.pack || st.pack, end: d.end, price: (gameInfo(d.game || st.game) || {}).price } : null; }).filter(Boolean);
-  const reports = {}; REPORTS.flatMap(g => g[1]).forEach(([k]) => reports[k] = n(D.reports[k]));
+  const reports = {}; reportFields().forEach(([k]) => reports[k] = n(D.reports[k]));
   const body = { action: "close", id: D.id, name: U.name, pin: U.pin, date: S.date, shift: S.shift, last: D.last, correction,
     registerTotal: regTotal(D.counts), safeTotal: safeTotal(D.counts), counts: D.counts, reports, slots,
     newGames: Object.entries(D.newGames).map(([game, price]) => ({ game, price })), note: D.note, photos };
@@ -554,7 +567,7 @@ SCREENS.close = () => {
   setBar(`Close Shift ${S.shift}`, `${U.name} · ${niceDate(S.date)} · Step ${S.step + 1} of 5`, true);
   return [stepCount, stepLottery, stepReports, stepPhotos, stepReview][S.step]();
 };
-BINDS.close = () => { [null, bindLottery, null, bindPhotos, bindReview][S.step]?.(); };
+BINDS.close = () => { [null, bindLottery, bindReports, bindPhotos, bindReview][S.step]?.(); };
 
 SCREENS.dupe = () => {
   setBar("Already sent", `Shift ${S.shift} · ${niceDate(S.date)}`, false);
