@@ -1,6 +1,6 @@
 // Keeps the app working when the store's internet drops.
 // Bump VERSION whenever you upload changed files so devices pick them up.
-const VERSION = "sm-shifts-v4";
+const VERSION = "sm-shifts-v5";
 const SHELL = ["./", "index.html", "app.css", "app.js", "config.js", "manifest.webmanifest",
   "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 

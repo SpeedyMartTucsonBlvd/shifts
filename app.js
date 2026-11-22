@@ -181,7 +181,7 @@ SCREENS.home = () => {
     <div class="card">${rows}</div></div>
   <p class="hint bad" id="homeErr" hidden></p>
   <div class="stack" style="margin-top:auto">
-    <button class="btn ghost" id="goOpen" type="button">Count my opening drawer (optional)</button>
+    <button class="btn ghost" id="goOpen" type="button">Open my shift (count drawer · scan lottery)</button>
     <button class="btn" id="goClose" type="button">Close my shift</button>
     ${me && /owner/i.test(me.role) ? `<button class="chip" id="goDrops" type="button">Count safe drops (owners)</button>` : ""}
     <button class="chip" id="goTest" type="button">Test the scanner</button>
@@ -198,7 +198,7 @@ BINDS.home = () => {
   const go = (screen) => async () => {
     const ok = await signIn(); if (!ok) return;
     if (screen === "close") startClose();
-    else if (screen === "open") { D = newDraft("open"); S.screen = "open"; render(); }
+    else if (screen === "open") { D = newDraft("open"); S.ostep = 0; S.screen = "open"; render(); }
     else if (screen === "drops") { S.screen = "drops"; render(); loadDrops(); }
   };
   $("#goClose").onclick = go("close"); $("#goOpen").onclick = go("open");
@@ -248,9 +248,24 @@ function countBlock(c) {
   ${BILLS.map(([k, l, v]) => `<div class="row"><div class="lbl">${l}</div><input class="amt" id="c-${k}" inputmode="numeric" value="${esc(c[k])}" placeholder="0" aria-label="${l} count"><div class="val num" id="v-${k}">${money(n(c[k]) * v)}</div></div>`).join("")}
   ${AMOUNTS.map(([k, l]) => `<div class="row"><div class="lbl">${l}<small>$ amount</small></div><input class="amt" id="c-${k}" inputmode="decimal" value="${esc(c[k])}" placeholder="0.00" aria-label="${l} dollar amount"><div class="val num" id="v-${k}">${money(n(c[k]))}</div></div>`).join("")}
   <div class="total"><span>Register total</span><span class="num" id="regT">${money(regTotal(c))}</span></div></div>
+  <div class="group"><h3><span>For the POS</span><span>enter these in the register</span></h3><div id="posSum">${posSummary(c)}</div></div>
   <div class="group"><h3><span>Safe</span><span># of bundles</span></h3>
   ${SAFE.map(([k, l, h, m]) => `<div class="row"><div class="lbl">${l}<small>${h}</small></div><input class="amt" id="c-${k}" inputmode="numeric" value="${esc(c[k])}" placeholder="0" aria-label="${l} bundles"><div class="val num" id="v-${k}">${money(n(c[k]) * m)}</div></div>`).join("")}
   <div class="total"><span>Safe total</span><span class="num" id="safeT">${money(safeTotal(c))}</span></div></div>`;
+}
+function posSummary(c) {
+  const rolls = COINS.filter(([k]) => n(c[k + "_r"]) > 0);
+  const rollCount = rolls.reduce((a, [k]) => a + n(c[k + "_r"]), 0);
+  const rollDollars = rolls.reduce((a, [k, , v, per]) => a + n(c[k + "_r"]) * per * v, 0);
+  const line = (l, r) => `<div class="row two"><div class="lbl">${l}</div><div class="val num">${r}</div></div>`;
+  let h = line(`<b>Rolled coin</b><small>${rolls.length ? rolls.map(([k, l]) => n(c[k + "_r"]) + " " + l.toLowerCase()).join(", ") : "No rolls"}</small>`, `${rollCount} roll${rollCount === 1 ? "" : "s"} · ${money(rollDollars)}`);
+  COINS.forEach(([k, l, v]) => { if (n(c[k + "_l"]) > 0) h += line(`Loose ${l.toLowerCase()}`, `${n(c[k + "_l"])} · ${money(n(c[k + "_l"]) * v)}`); });
+  BILLS.forEach(([k, l, v]) => { if (n(c[k]) > 0) h += line(l, `${n(c[k])} · ${money(n(c[k]) * v)}`); });
+  AMOUNTS.forEach(([k, l]) => { if (n(c[k]) > 0) h += line(l, money(n(c[k]))); });
+  const loose = r2(regTotal(c) - rollDollars);
+  h += line("<b>In the drawer (not rolled)</b>", money(loose));
+  h += line("<b>Register total</b>", money(regTotal(c)));
+  return h;
 }
 function onAmt(inp) {
   const [g, k] = inp.id.split("-");
@@ -261,7 +276,8 @@ function onAmt(inp) {
     const v = coin ? coinVal(c, base) : bill ? n(c[base]) * bill[2] : safe ? n(c[base]) * safe[3] : n(c[base]);
     const el = $("#v-" + base); if (el) el.textContent = money(v);
     $("#regT").textContent = money(regTotal(c)); $("#safeT").textContent = money(safeTotal(c));
-    if (S.screen === "open") $("#cmp").innerHTML = openCompare();
+    const ps = $("#posSum"); if (ps) ps.innerHTML = posSummary(c);
+    if (S.screen === "open" && $("#cmp")) $("#cmp").innerHTML = openCompare();
   }
   if (g === "r" && D) D.reports[k] = inp.value;
   saveDraft();
@@ -276,21 +292,39 @@ function openCompare() {
   return row("Register vs last close", dr, lc.register) + row("Safe vs last close", ds, lc.safe);
 }
 SCREENS.open = () => {
-  setBar(`Open Shift ${S.shift}`, `${U.name} · optional`, true);
-  return `<h2>Opening count</h2><p class="hint">Optional. Count when it's quiet. The app checks your count against the last close.</p>
+  const first = S.shift === 1;
+  if (S.ostep === 1) {
+    setBar(`Open Shift ${S.shift}`, `${U.name} · Step 2 of 2 · Lottery`, true);
+    return `<h2>Scan the scratchers</h2><p class="hint">Scan the next ticket in each slot. This sets today's starting numbers and checks them against last night's close.</p>
+    ${lotteryList(true)}
+    <div class="btnrow"><button class="btn ghost" type="button" id="oBack">Back</button><button class="btn" type="button" id="saveOpen">Save opening</button></div>`;
+  }
+  setBar(`Open Shift ${S.shift}`, `${U.name} · Step 1 of 2 · Count`, true);
+  return `<h2>Opening count</h2><p class="hint">${first ? "Count the drawer, then scan the lottery to start the day." : "Optional. Count when it's quiet. The app checks your count against the last close."}</p>
   ${countBlock(D.counts)}<div class="sum" id="cmp">${openCompare()}</div>
-  <div class="btnrow"><button class="btn ghost" type="button" id="prev">Back</button><button class="btn" type="button" id="saveOpen">Save opening count</button></div>`;
+  <div class="btnrow"><button class="btn ghost" type="button" id="prev">Back</button><button class="btn" type="button" id="oNext">Next: scan lottery</button></div>
+  ${first ? "" : `<button class="link" type="button" id="saveOpen" style="align-self:center">Save without scanning the lottery</button>`}`;
 };
 BINDS.open = () => {
-  $("#saveOpen").onclick = async () => {
+  const nx = $("#oNext"); if (nx) nx.onclick = () => { S.ostep = 1; render(); window.scrollTo(0, 0); };
+  const bk = $("#oBack"); if (bk) bk.onclick = () => { S.ostep = 0; render(); window.scrollTo(0, 0); };
+  if (S.ostep === 1) bindLottery();
+  const sv = $("#saveOpen"); if (sv) sv.onclick = async () => {
+    const slots = S.ostep === 1 ? (B.slots || []).map(st => { const d = D.slots[st.slot]; return d && d.end !== null && d.end !== undefined && d.end !== "" && (d.game || st.game) && (d.pack || st.pack) ? { slot: st.slot, game: d.game || st.game, pack: d.pack || st.pack, end: d.end, price: (gameInfo(d.game || st.game) || {}).price } : null; }).filter(Boolean) : [];
     const body = { action: "open", id: D.id, name: U.name, pin: U.pin, date: S.date, shift: S.shift,
-      registerTotal: regTotal(D.counts), safeTotal: safeTotal(D.counts), counts: D.counts };
+      registerTotal: regTotal(D.counts), safeTotal: safeTotal(D.counts), counts: D.counts, slots,
+      newGames: Object.entries(D.newGames).map(([game, price]) => ({ game, price })) };
     await DB.put({ id: D.id, kind: "open", created: Date.now(), body, label: `Opening count · Shift ${S.shift} · ${U.name}` });
     $("#saveOpen").disabled = true; $("#saveOpen").textContent = "Sending…";
     const res = (await flush()).find(x => x.id === D.id);
     signOut(); await refresh(); render();
     if (!res) toast("Saved on this device. It will send when the internet is back.");
-    else if (res.res.ok) toast("Opening count saved." + (res.res.registerDiff !== "" && res.res.registerDiff !== undefined && Math.abs(res.res.registerDiff) > 0.004 ? ` Register is ${signed(res.res.registerDiff)} vs last close.` : " Matches last close."));
+    else if (res.res.ok) {
+      const lg = res.res.lottery;
+      const rd = res.res.registerDiff, hasRd = rd !== "" && rd !== undefined && rd !== null;
+      toast("Opening saved." + (!hasRd ? "" : Math.abs(rd) > 0.004 ? ` Register is ${signed(rd)} vs last close.` : " Register matches last close.")
+        + (lg ? (lg.tickets ? ` Lottery: ${lg.tickets} ticket${lg.tickets === 1 ? "" : "s"} (${money(lg.gap)}) different from last close.` : " Lottery starting numbers saved, no differences.") : ""), 7000);
+    }
     else toast(res.res.error || "The sheet didn't accept it.");
   };
 };
@@ -323,11 +357,15 @@ function slotCalc(st) {
 }
 function lotteryDollars() { return r2((B.slots || []).reduce((a, st) => { const c = slotCalc(st); return a + (c.state === "ok" ? c.dollars : 0); }, 0)); }
 function stepLottery() {
-  const slots = B.slots || [];
-  const done = slots.filter(st => ["ok", "first"].includes(slotCalc(st).state)).length;
   return `<h2>Scan the scratchers</h2>
   <p class="hint">For each slot, tap <b>Scan</b> and take a photo of the long barcode on the back of the next ticket. If it won't read, tap <b>Type it</b>.</p>
-  <div class="group"><h3><span>Slots</span><span>${done} of ${slots.length} done</span></h3><div class="slots">
+  ${lotteryList(false)}
+  ${nav()}`;
+}
+function lotteryList(opening) {
+  const slots = B.slots || [];
+  const done = slots.filter(st => ["ok", "first"].includes(slotCalc(st).state)).length;
+  return `<div class="group"><h3><span>Slots</span><span>${done} of ${slots.length} done</span></h3><div class="slots">
   ${slots.map(st => {
     const c = slotCalc(st), d = D.slots[st.slot] || {}, g = gameInfo(d.game || st.game);
     const priceTag = g ? "$" + g.price : "";
@@ -336,6 +374,8 @@ function stepLottery() {
     else if (c.state === "first") main = `Starting number ${pad3(d.end)} saved`;
     else if (c.state === "price") main = `New game ${esc(d.game)}. What's the ticket price?`;
     else if (c.state === "backwards") main = `${pad3(st.ticket)} → ${pad3(d.end)}: number went down`;
+    else if (opening && c.sold === 0) main = `${pad3(d.end)} · matches last close`;
+    else if (opening) main = `${pad3(st.ticket)} → ${pad3(d.end)} · ${c.sold} gone since last close · ${money(c.dollars)}`;
     else main = `${pad3(st.ticket)} → ${pad3(d.end)} · ${c.sold} sold · ${money(c.dollars)}`;
     const pills = (c.isNew ? `<span class="pill info">New pack</span>` : "") + (c.state === "backwards" ? `<span class="pill bad">Rescan</span>` : "") + (c.state === "first" ? `<span class="pill info">First count</span>` : "");
     const extra = c.state === "price" ? `<div class="extra">${PRICES.map(p => `<button type="button" class="chip pr" data-n="${st.slot}" data-p="${p}">$${p}</button>`).join("")}</div>`
@@ -348,9 +388,8 @@ function stepLottery() {
       <div class="stack" style="gap:6px"><button type="button" class="chip scan ${doneBtn ? "done" : ""}" data-n="${st.slot}">${doneBtn ? "✓ " + pad3(d.end) : "Scan"}</button>
       ${d.manual ? "" : `<button type="button" class="link type" data-n="${st.slot}" style="font-size:13px">Type it</button>`}</div>${extra}</div>`;
   }).join("")}</div>
-  <div class="total"><span>Scratcher sales scanned</span><span class="num">${money(lotteryDollars())}</span></div></div>
-  ${done < slots.length ? `<p class="hint warn">${slots.length - done} slot${slots.length - done > 1 ? "s" : ""} not done. Unscanned slots count toward the next shift instead.</p>` : ""}
-  ${nav()}`;
+  <div class="total"><span>${opening ? "Difference from last close" : "Scratcher sales scanned"}</span><span class="num">${money(lotteryDollars())}</span></div></div>
+  ${done < slots.length ? `<p class="hint warn">${slots.length - done} slot${slots.length - done > 1 ? "s" : ""} not done.${opening ? "" : " Unscanned slots count toward the next shift instead."}</p>` : ""}`;
 }
 function bindLottery() {
   $$(".scan").forEach(b => b.onclick = () => pickBarcode(+b.dataset.n));
