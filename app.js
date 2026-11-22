@@ -19,15 +19,17 @@ const store = {
 
 // ---------- Fixed lists ----------
 const COINS = [["pennies", "Pennies", 0.01, 50], ["nickels", "Nickels", 0.05, 40], ["dimes", "Dimes", 0.10, 50], ["quarters", "Quarters", 0.25, 40]];
-const BILLS = [["ones", "Ones", 1], ["fives", "Fives", 5], ["tens", "Tens", 10], ["twenties", "Twenties", 20]];
-const AMOUNTS = [["mixed", "$2 bills / half dollars / dollar coins"], ["big", "$50 / $100 bills"]];
+const BILLS = [["ones", "Ones", 1], ["twos", "$2 bills", 2], ["fives", "Fives", 5], ["tens", "Tens", 10], ["twenties", "Twenties", 20], ["fifties", "$50 bills", 50], ["hundreds", "$100 bills", 100], ["halves", "Half dollars", 0.5], ["dollarCoins", "Dollar coins", 1]];
+const AMOUNTS = []; // older drafts may still carry "mixed"/"big" dollar amounts; they're no longer used
+// Safe bundles add to these bill counts for the POS.
+const SAFE_BILL = { r5: ["ones", 20], r7: ["fives", 10], r8: ["twenties", 3] };
 const SAFE = [["r5", "Row 5 ($1)", "bundles of 20 × $1", 20], ["r7", "Row 7 ($5)", "bundles of 10 × $5", 50], ["r8", "Row 8 ($20)", "bundles of 3 × $20", 60]];
 const POS_FIELDS = [["expected", "Expected cash in drawer"], ["posScratch", "Scratcher sales"], ["posDraw", "Lotto / draw game sales"], ["posPayout", "Lottery payouts"], ["drops", "Cash drops (total)"]];
 const SHIFT_LOTTO = [["loaded", "Tickets loaded"]];
 const EOD_LOTTO = [["termDraw", "Draw game gross sales"], ["cashes", "Draw game cashes"], ["validations", "Scratcher validations"]];
 const reportFields = () => POS_FIELDS.concat(SHIFT_LOTTO, D && D.last ? EOD_LOTTO : []);
 const PRICES = [1, 2, 3, 5, 10, 20, 30, 50];
-const STEPS = ["Count", "Lottery", "Reports", "Photos", "Review"];
+const STEPS = ["Count", "Reports", "Lottery", "Photos", "Review"];
 
 // ---------- State ----------
 let B = store.get("sm_boot", null);       // data from the sheet
@@ -239,7 +241,8 @@ function startClose() {
 
 // ---------- Counting ----------
 function countBlock(c) {
-  return `<div class="group"><h3><span>Coins</span><span>rolls · loose</span></h3>
+  return `<div class="group"><h3><span>Coins</span><span>count them</span></h3>
+  <div class="colhead" style="grid-template-columns:minmax(0,1fr) 62px 70px 78px"><span></span><span># rolls</span><span># loose</span><span>$</span></div>
   ${COINS.map(([k, l, , per]) => `<div class="row coin"><div class="lbl">${l}<small>roll = ${per}</small></div>
     <input class="amt" id="c-${k}_r" inputmode="numeric" value="${esc(c[k + "_r"])}" placeholder="0" aria-label="${l} rolls">
     <input class="amt" id="c-${k}_l" inputmode="numeric" value="${esc(c[k + "_l"])}" placeholder="0" aria-label="${l} loose">
@@ -248,24 +251,24 @@ function countBlock(c) {
   ${BILLS.map(([k, l, v]) => `<div class="row"><div class="lbl">${l}</div><input class="amt" id="c-${k}" inputmode="numeric" value="${esc(c[k])}" placeholder="0" aria-label="${l} count"><div class="val num" id="v-${k}">${money(n(c[k]) * v)}</div></div>`).join("")}
   ${AMOUNTS.map(([k, l]) => `<div class="row"><div class="lbl">${l}<small>$ amount</small></div><input class="amt" id="c-${k}" inputmode="decimal" value="${esc(c[k])}" placeholder="0.00" aria-label="${l} dollar amount"><div class="val num" id="v-${k}">${money(n(c[k]))}</div></div>`).join("")}
   <div class="total"><span>Register total</span><span class="num" id="regT">${money(regTotal(c))}</span></div></div>
-  <div class="group"><h3><span>For the POS</span><span>enter these in the register</span></h3><div id="posSum">${posSummary(c)}</div></div>
+  <div class="group"><h3><span>For the POS</span><span>number of each</span></h3><div id="posSum">${posSummary(c)}</div></div>
   <div class="group"><h3><span>Safe</span><span># of bundles</span></h3>
   ${SAFE.map(([k, l, h, m]) => `<div class="row"><div class="lbl">${l}<small>${h}</small></div><input class="amt" id="c-${k}" inputmode="numeric" value="${esc(c[k])}" placeholder="0" aria-label="${l} bundles"><div class="val num" id="v-${k}">${money(n(c[k]) * m)}</div></div>`).join("")}
   <div class="total"><span>Safe total</span><span class="num" id="safeT">${money(safeTotal(c))}</span></div></div>`;
 }
 function posSummary(c) {
-  const rolls = COINS.filter(([k]) => n(c[k + "_r"]) > 0);
-  const rollCount = rolls.reduce((a, [k]) => a + n(c[k + "_r"]), 0);
-  const rollDollars = rolls.reduce((a, [k, , v, per]) => a + n(c[k + "_r"]) * per * v, 0);
-  const line = (l, r) => `<div class="row two"><div class="lbl">${l}</div><div class="val num">${r}</div></div>`;
-  let h = line(`<b>Rolled coin</b><small>${rolls.length ? rolls.map(([k, l]) => n(c[k + "_r"]) + " " + l.toLowerCase()).join(", ") : "No rolls"}</small>`, `${rollCount} roll${rollCount === 1 ? "" : "s"} · ${money(rollDollars)}`);
-  COINS.forEach(([k, l, v]) => { if (n(c[k + "_l"]) > 0) h += line(`Loose ${l.toLowerCase()}`, `${n(c[k + "_l"])} · ${money(n(c[k + "_l"]) * v)}`); });
-  BILLS.forEach(([k, l, v]) => { if (n(c[k]) > 0) h += line(l, `${n(c[k])} · ${money(n(c[k]) * v)}`); });
-  AMOUNTS.forEach(([k, l]) => { if (n(c[k]) > 0) h += line(l, money(n(c[k]))); });
-  const loose = r2(regTotal(c) - rollDollars);
-  h += line("<b>In the drawer (not rolled)</b>", money(loose));
-  h += line("<b>Register total</b>", money(regTotal(c)));
-  return h;
+  const line = (l, r, sub) => `<div class="row two"><div class="lbl">${l}${sub ? `<small>${sub}</small>` : ""}</div><div class="val num">${r}</div></div>`;
+  let h = "";
+  COINS.forEach(([k, l, v, per]) => {
+    const rolls = n(c[k + "_r"]), loose = n(c[k + "_l"]), total = rolls * per + loose;
+    if (total > 0) h += line(l, total, rolls ? `${rolls} roll${rolls === 1 ? "" : "s"} × ${per} + ${loose} loose` : "");
+  });
+  BILLS.forEach(([k, l]) => {
+    const drawer = n(c[k]);
+    const fromSafe = Object.entries(SAFE_BILL).filter(([, [bk]]) => bk === k).reduce((a, [sk, [, per]]) => a + n(c[sk]) * per, 0);
+    if (drawer + fromSafe > 0) h += line(l, drawer + fromSafe, fromSafe ? `${drawer} in drawer + ${fromSafe} in safe` : "");
+  });
+  return (h || line("Nothing counted yet", "")) + line("<b>Total (drawer + safe)</b>", money(regTotal(c) + safeTotal(c)));
 }
 function onAmt(inp) {
   const [g, k] = inp.id.split("-");
@@ -360,6 +363,7 @@ function stepLottery() {
   return `<h2>Scan the scratchers</h2>
   <p class="hint">For each slot, tap <b>Scan</b> and take a photo of the long barcode on the back of the next ticket. If it won't read, tap <b>Type it</b>.</p>
   ${lotteryList(false)}
+  ${(() => { const np = (B.slots || []).map(slotCalc).filter(c => c.isNew).length; return np ? `<p class="hint">You scanned ${np} new pack${np > 1 ? "s" : ""}. Tickets loaded on the lottery report (${money(n(D.reports.loaded))}) should include ${np > 1 ? "them" : "it"}.</p>` : ""; })()}
   ${nav()}`;
 }
 function lotteryList(opening) {
@@ -502,7 +506,7 @@ function stepReports() {
   ${[["POS shift report", POS_FIELDS], ["Lottery machine report", SHIFT_LOTTO]].map(([h, fs]) => fieldGroup(h, fs)).join("")}
   <label class="check"><input type="checkbox" id="lastR" ${D.last ? "checked" : ""}><span><b>Last shift of the day</b><br><span class="hint">Check this if you're closing out the day. You'll add the end-of-day lottery numbers.</span></span></label>
   ${D.last ? fieldGroup("Lottery report · end of day", EOD_LOTTO) : ""}
-  <p class="hint">${np ? `You scanned ${np} new pack${np > 1 ? "s" : ""} this shift. Tickets loaded should include ${np > 1 ? "them" : "it"}.` : "No new packs scanned this shift."}</p>
+
   ${nav()}`;
 }
 
@@ -547,14 +551,14 @@ function calc() {
   const others = S.date === B.today ? (B.todayShifts || []).filter(x => x.shift !== S.shift) : [];
   const sum = k => others.reduce((a, x) => a + (Number(x[k]) || 0), 0);
   const lines = [
-    ["Scratchers (POS − scanned)", r2(n(r.posScratch) - lot)],
-    ["Register (counted − expected)", r2(regTotal(D.counts) - n(r.expected))]
+    ["Scratchers (POS − scanned)", r2(n(r.posScratch) - lot), `POS ${money(n(r.posScratch))} · scanned ${money(lot)}`],
+    ["Cash (drawer + safe − expected)", r2(regTotal(D.counts) + safeTotal(D.counts) - n(r.expected)), `Counted ${money(regTotal(D.counts) + safeTotal(D.counts))} · POS expected ${money(n(r.expected))}`]
   ];
   const inv = null;
   if (D.last) {
     // Draw games and payouts come from the lottery report once a day, so they're checked for the whole day.
-    lines.push(["Draw games (day's POS − lottery report)", r2(n(r.posDraw) + sum("posDraw") - n(r.termDraw))]);
-    lines.push(["Payouts (lottery report − day's POS)", r2(n(r.cashes) + n(r.validations) - n(r.posPayout) - sum("posPayout"))]);
+    lines.push(["Draw games (day's POS − lottery report)", r2(n(r.posDraw) + sum("posDraw") - n(r.termDraw)), `POS ${money(n(r.posDraw) + sum("posDraw"))} · lottery ${money(n(r.termDraw))}`]);
+    lines.push(["Payouts (lottery report − day's POS)", r2(n(r.cashes) + n(r.validations) - n(r.posPayout) - sum("posPayout")), `Lottery ${money(n(r.cashes) + n(r.validations))} · POS ${money(n(r.posPayout) + sum("posPayout"))}`]);
   }
   const total = r2(lines.reduce((a, l) => a + l[1], 0));
   return { lines, total, day: r2(total + others.reduce((a, x) => a + x.total, 0)), inv, lot };
@@ -565,7 +569,7 @@ function stepReview() {
   const notDone = (B.slots || []).filter(st => !["ok", "first"].includes(slotCalc(st).state)).length;
   const blank = reportFields().filter(([k]) => D.reports[k] === undefined || D.reports[k] === "").map(x => x[1]);
   return `<h2>Check and send</h2>
-  <div class="sum">${c.lines.map(([l, v]) => `<div><span>${l}</span><span class="num ${v < -0.004 ? "neg" : v > 0.004 ? "pos" : ""}">${signed(v)}</span></div>`).join("")}
+  <div class="sum">${c.lines.map(([l, v, d]) => `<div><span>${l}${d ? `<br><span class="hint">${d}</span>` : ""}</span><span class="num ${v < -0.004 ? "neg" : v > 0.004 ? "pos" : ""}">${signed(v)}</span></div>`).join("")}
   <div style="font-weight:700"><span>Shift ${S.shift} over / short</span><span class="num">${signed(c.total)}</span></div></div>
   <div class="sum">${D.last ? "" : `<div><span>Draw games and payouts</span><span class="pill info">Checked at end of day</span></div>`}
   <div><span>Register / safe counted</span><span class="num">${money(regTotal(D.counts))} / ${money(safeTotal(D.counts))}</span></div></div>
@@ -603,9 +607,9 @@ async function sendClose(correction) {
 
 SCREENS.close = () => {
   setBar(`Close Shift ${S.shift}`, `${U.name} · ${niceDate(S.date)} · Step ${S.step + 1} of 5`, true);
-  return [stepCount, stepLottery, stepReports, stepPhotos, stepReview][S.step]();
+  return [stepCount, stepReports, stepLottery, stepPhotos, stepReview][S.step]();
 };
-BINDS.close = () => { [null, bindLottery, bindReports, bindPhotos, bindReview][S.step]?.(); };
+BINDS.close = () => { [null, bindReports, bindLottery, bindPhotos, bindReview][S.step]?.(); };
 
 SCREENS.dupe = () => {
   setBar("Already sent", `Shift ${S.shift} · ${niceDate(S.date)}`, false);
