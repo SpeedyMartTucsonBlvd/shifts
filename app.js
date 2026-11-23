@@ -24,7 +24,7 @@ const AMOUNTS = []; // older drafts may still carry "mixed"/"big" dollar amounts
 // Safe bundles add to these bill counts for the POS.
 const SAFE_BILL = { r5: ["ones", 20], r7: ["fives", 10], r8: ["twenties", 3] };
 const SAFE = [["r5", "Row 5 ($1)", "bundles of 20 × $1", 20], ["r7", "Row 7 ($5)", "bundles of 10 × $5", 50], ["r8", "Row 8 ($20)", "bundles of 3 × $20", 60]];
-const POS_FIELDS = [["expected", "Expected cash in drawer"], ["posScratch", "Scratcher sales"], ["posDraw", "Lotto / draw game sales"], ["posPayout", "Lottery payouts"], ["drops", "Cash drops (total)"]];
+const POS_FIELDS = [["expected", "Expected cash"], ["posScratch", "Scratcher sales<small>POS line: Online Lottery</small>"], ["posDraw", "Draw game sales<small>POS line: Lotto Sales</small>"], ["posPayout", "Lottery payouts<small>POS lines: Lotto Payout + Online Payout</small>"], ["drops", "Cash drops (total)"]];
 const SHIFT_LOTTO = [["loaded", "Tickets loaded"]];
 const EOD_LOTTO = [["termDraw", "Draw game gross sales"], ["cashes", "Draw game cashes"], ["validations", "Scratcher validations"]];
 const reportFields = () => POS_FIELDS.concat(SHIFT_LOTTO, D && D.last ? EOD_LOTTO : []);
@@ -149,6 +149,7 @@ function bindCommon() {
   $$("input.amt").forEach(inp => inp.oninput = () => onAmt(inp));
 }
 function goBack() {
+  if (S.screen === "edit") { S.screen = "hist"; render(); return; }
   if (S.screen === "close" && S.step > 0) { S.step--; render(); window.scrollTo(0, 0); return; }
   S.screen = "home"; render();
 }
@@ -183,9 +184,9 @@ SCREENS.home = () => {
     <div class="card">${rows}</div></div>
   <p class="hint bad" id="homeErr" hidden></p>
   <div class="stack" style="margin-top:auto">
-    <button class="btn ghost" id="goOpen" type="button">Open my shift (count drawer · scan lottery)</button>
+    <button class="btn ghost" id="goOpen" type="button">${opened.find(x => x.shift === S.shift) ? `Shift ${S.shift} opened ✓ · update it` : "Open my shift (count drawer · scan lottery)"}</button>
     <button class="btn" id="goClose" type="button">Close my shift</button>
-    ${me && /owner/i.test(me.role) ? `<button class="chip" id="goDrops" type="button">Count safe drops (owners)</button>` : ""}
+    ${me && /owner/i.test(me.role) ? `<button class="chip" id="goDrops" type="button">Count safe drops (owners)</button><button class="chip" id="goHist" type="button">Review & fix (owners)</button>` : ""}
     <button class="chip" id="goTest" type="button">Test the scanner</button>
     <button class="chip" id="goOutbox" type="button" hidden>Unsent shifts</button>
   </div>`;
@@ -194,7 +195,7 @@ BINDS.home = () => {
   const r = $("#retry"); if (r) r.onclick = async () => { await refresh(); render(); };
   if (!B) return;
   $("#who").onchange = e => { S.name = e.target.value; render(); };
-  $$("#seg button").forEach(b => b.onclick = () => { S.shift = +b.dataset.s; $$("#seg button").forEach(x => x.setAttribute("aria-pressed", x === b)); });
+  $$("#seg button").forEach(b => b.onclick = () => { S.shift = +b.dataset.s; const pin = $("#pin").value; render(); $("#pin").value = pin; });
   $("#chDate").onclick = () => { $("#dateIn").hidden = false; $("#dateIn").focus(); };
   $("#dateIn").onchange = e => { if (e.target.value) { S.date = e.target.value; render(); } };
   const go = (screen) => async () => {
@@ -202,9 +203,11 @@ BINDS.home = () => {
     if (screen === "close") startClose();
     else if (screen === "open") { D = newDraft("open"); S.ostep = 0; S.screen = "open"; render(); }
     else if (screen === "drops") { S.screen = "drops"; render(); loadDrops(); }
+    else if (screen === "hist") { S.screen = "hist"; HIST = null; render(); loadHist(); }
   };
   $("#goClose").onclick = go("close"); $("#goOpen").onclick = go("open");
   const gd = $("#goDrops"); if (gd) gd.onclick = go("drops");
+  const gh = $("#goHist"); if (gh) gh.onclick = go("hist");
   $("#goTest").onclick = () => { S.screen = "test"; render(); };
   DB.all().then(items => { const b = $("#goOutbox"); if (b && items.length) { b.hidden = false; b.textContent = `Unsent shifts (${items.length})`; b.onclick = () => { S.screen = "outbox"; render(); }; } }).catch(() => {});
 };
@@ -325,7 +328,7 @@ BINDS.open = () => {
     else if (res.res.ok) {
       const lg = res.res.lottery;
       const rd = res.res.registerDiff, hasRd = rd !== "" && rd !== undefined && rd !== null;
-      toast("Opening saved." + (!hasRd ? "" : Math.abs(rd) > 0.004 ? ` Register is ${signed(rd)} vs last close.` : " Register matches last close.")
+      toast((res.res.merged ? "This shift was already opened, so the opening was updated (not added twice)." : "Opening saved.") + (!hasRd ? "" : Math.abs(rd) > 0.004 ? ` Register is ${signed(rd)} vs last close.` : " Register matches last close.")
         + (lg ? (lg.tickets ? ` Lottery: ${lg.tickets} ticket${lg.tickets === 1 ? "" : "s"} (${money(lg.gap)}) different from last close.` : " Lottery starting numbers saved, no differences.") : ""), 7000);
     }
     else toast(res.res.error || "The sheet didn't accept it.");
@@ -511,7 +514,7 @@ function stepReports() {
 }
 
 function fieldGroup(h, fs) {
-  return `<div class="group"><h3><span>${h}</span></h3>${fs.map(([k, l]) => `<div class="row two"><div class="lbl">${l}</div><input class="amt" id="r-${k}" inputmode="decimal" value="${esc(D.reports[k] ?? "")}" placeholder="0.00" aria-label="${l}"></div>`).join("")}</div>`;
+  return `<div class="group"><h3><span>${h}</span></h3>${fs.map(([k, l]) => `<div class="row two"><div class="lbl">${l}</div><input class="amt" id="r-${k}" inputmode="decimal" value="${esc(D.reports[k] ?? "")}" placeholder="0.00" aria-label="${l.replace(/<[^>]*>.*$/, "")}"></div>`).join("")}</div>`;
 }
 function bindReports() { $("#lastR").onchange = e => { D.last = e.target.checked; saveDraft(); render(); }; }
 
@@ -693,6 +696,81 @@ BINDS.drops = () => {
       x.counted = val === "" ? null : val; render(); toast("Saved.");
     } catch (e) { toast("No internet. That count didn't save."); }
   });
+};
+
+// ---------- Review & fix (owners) ----------
+let HIST = null, EDIT = null;
+const EDIT_FIELDS = [["register", "Register counted"], ["safe", "Safe counted"], ["expected", "Expected cash"], ["posScratch", "Scratcher sales (Online Lottery)"],
+  ["posDraw", "Draw game sales (Lotto Sales)"], ["posPayout", "Lottery payouts"], ["drops", "Cash drops (total)"], ["loaded", "Tickets loaded"]];
+const EDIT_EOD = [["termDraw", "Draw game gross sales"], ["cashes", "Draw game cashes"], ["validations", "Scratcher validations"]];
+async function loadHist() {
+  try { const r = await apiPost({ action: "history", name: U.name, pin: U.pin }); HIST = r.ok ? r.days : { error: r.error }; }
+  catch (e) { HIST = { error: "Review & fix needs the internet. Try again when you're connected." }; }
+  if (S.screen === "hist") render();
+}
+SCREENS.hist = () => {
+  setBar("Review & fix", "Owners · " + (U ? U.name : ""), true);
+  if (!HIST) return `<h2>Review & fix</h2><p class="hint">Loading the last two weeks…</p>`;
+  if (HIST.error) return `<h2>Review & fix</h2><p class="hint bad">${esc(HIST.error)}</p><div style="margin-top:auto"><button class="btn ghost" id="prev" type="button">Back</button></div>`;
+  return `<h2>Review & fix</h2><p class="hint">Tap a close to check or fix its numbers. The app redoes the math and the day total. Every change is noted on the shift in the sheet.</p>
+  ${HIST.length ? HIST.map(d => `<div class="group"><h3><span>${niceDate(d.date)}</span><span>${d.total === undefined ? "" : "Day " + signed(d.total)}</span></h3>
+    ${d.opens.sort((a, b) => a.shift - b.shift).map(o => `<div class="row" style="grid-template-columns:minmax(0,1fr) auto"><div class="lbl">Opening · Shift ${o.shift} · ${esc(o.cashier)}<small>${esc(o.at)} · register ${money(o.register)} · safe ${money(o.safe)}</small></div>
+      <button class="link rmopen" data-id="${esc(o.id)}" type="button">Remove</button></div>`).join("")}
+    ${d.shifts.sort((a, b) => a.shift - b.shift).map(x => `<div class="row" style="grid-template-columns:minmax(0,1fr) auto"><div class="lbl">Close · Shift ${x.shift} · ${esc(x.cashier)}${x.last ? " · last" : ""}<small>${esc(x.at)} · ${signed(x.total)}${x.note ? " · edited/noted" : ""}</small></div>
+      <button class="chip edsh" data-id="${esc(x.id)}" type="button">Check / fix</button></div>`).join("")}</div>`).join("") : `<p class="hint">Nothing from the last two weeks yet.</p>`}
+  <div style="margin-top:auto"><button class="btn ghost" id="prev" type="button">Back</button></div>`;
+};
+BINDS.hist = () => {
+  $$(".rmopen").forEach(b => b.onclick = async () => {
+    if (!b.dataset.confirm) { b.dataset.confirm = "1"; b.textContent = "Tap again to remove"; return; }
+    try { const r = await apiPost({ action: "removeOpen", name: U.name, pin: U.pin, openId: b.dataset.id }); toast(r.ok ? "Opening removed." : r.error); }
+    catch (e) { toast("No internet. Nothing was changed."); }
+    HIST = null; render(); loadHist();
+  });
+  $$(".edsh").forEach(b => b.onclick = () => {
+    for (const d of HIST) { const x = d.shifts.find(s => s.id === b.dataset.id); if (x) { EDIT = { ...x, date: d.date, f: { ...x.fields } }; break; } }
+    S.screen = "edit"; render(); window.scrollTo(0, 0);
+  });
+};
+function editCalc() {
+  const f = EDIT.f, num = k => n(f[k]);
+  const day = HIST.find(d => d.date === EDIT.date), others = day.shifts.filter(s => s.id !== EDIT.id);
+  const sum = k => others.reduce((a, s) => a + n(s.fields[k]), 0);
+  const lines = [["Scratchers (POS − scanned)", r2(num("posScratch") - EDIT.scanned), `POS ${money(num("posScratch"))} · scanned ${money(EDIT.scanned)}`],
+    ["Cash (drawer + safe − expected)", r2(num("register") + num("safe") - num("expected")), `Counted ${money(num("register") + num("safe"))} · expected ${money(num("expected"))}`]];
+  if (EDIT.last) {
+    lines.push(["Draw games (day's POS − lottery report)", r2(num("posDraw") + sum("posDraw") - num("termDraw")), `POS ${money(num("posDraw") + sum("posDraw"))} · lottery ${money(num("termDraw"))}`]);
+    lines.push(["Payouts (lottery report − day's POS)", r2(num("cashes") + num("validations") - num("posPayout") - sum("posPayout")), `Lottery ${money(num("cashes") + num("validations"))} · POS ${money(num("posPayout") + sum("posPayout"))}`]);
+  }
+  return { lines, total: r2(lines.reduce((a, l) => a + l[1], 0)) };
+}
+SCREENS.edit = () => {
+  setBar(`Fix Shift ${EDIT.shift}`, `${niceDate(EDIT.date)} · ${EDIT.cashier}`, false);
+  const c = editCalc(), photos = EDIT.photos.split("\n").filter(Boolean).map(p => { const i = p.indexOf(": "); return `<a href="${esc(p.slice(i + 2))}" target="_blank" rel="noopener">${esc(p.slice(0, i))} photo</a>`; }).join(" · ");
+  const fld = ([k, l]) => `<div class="row two"><div class="lbl">${l}</div><input class="num ef" style="text-align:right;min-height:42px;padding:8px 10px" data-k="${k}" inputmode="decimal" value="${EDIT.f[k] === "" || EDIT.f[k] === undefined ? "" : EDIT.f[k]}" aria-label="${l}"></div>`;
+  return `<h2>Check Shift ${EDIT.shift}</h2>
+  ${photos ? `<p class="hint">Compare with the ${photos}.</p>` : ""}
+  <div class="group"><h3><span>Numbers sent</span><span>edit if wrong</span></h3>${EDIT_FIELDS.map(fld).join("")}${EDIT.last ? EDIT_EOD.map(fld).join("") : ""}</div>
+  <div class="sum" id="editSum">${editSum(c)}</div>
+  ${EDIT.note ? `<p class="hint">Note: ${esc(EDIT.note)}</p>` : ""}
+  <div class="btnrow"><button class="btn ghost" type="button" id="edBack">Back</button><button class="btn" type="button" id="edSave">Save changes</button></div>`;
+};
+function editSum(c) {
+  return c.lines.map(([l, v, d]) => `<div><span>${l}<br><span class="hint">${d}</span></span><span class="num ${v < -0.004 ? "neg" : v > 0.004 ? "pos" : ""}">${signed(v)}</span></div>`).join("")
+    + `<div style="font-weight:700"><span>Shift ${EDIT.shift} over / short</span><span class="num">${signed(c.total)}</span></div>`;
+}
+BINDS.edit = () => {
+  $$("input.ef").forEach(i => i.oninput = () => { EDIT.f[i.dataset.k] = i.value === "" ? "" : n(i.value); $("#editSum").innerHTML = editSum(editCalc()); });
+  $("#edBack").onclick = () => { S.screen = "hist"; render(); };
+  $("#edSave").onclick = async () => {
+    const btn = $("#edSave"); btn.disabled = true; btn.textContent = "Saving…";
+    try {
+      const r = await apiPost({ action: "editShift", name: U.name, pin: U.pin, shiftId: EDIT.id, fields: EDIT.f });
+      if (!r.ok) { toast(r.error || "Didn't save."); btn.disabled = false; btn.textContent = "Save changes"; return; }
+      toast(r.unchanged ? "Nothing changed." : `Saved. ${niceDate(EDIT.date)} is now ${signed(r.dayTotal)}.`, 5000);
+      S.screen = "hist"; HIST = null; render(); loadHist();
+    } catch (e) { toast("No internet. Nothing was saved."); btn.disabled = false; btn.textContent = "Save changes"; }
+  };
 };
 
 // ---------- Unsent shifts ----------
